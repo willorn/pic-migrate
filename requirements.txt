@@ -3,6 +3,7 @@ python-dotenv
 requests
 requests-file
 requests-toolbelt
+coloredlogs  # 添加这一行
 
 # 类型提示相关
 typing-inspect==0.9.0
