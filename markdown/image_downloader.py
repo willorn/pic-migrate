@@ -1,24 +1,63 @@
 import os
 import re
+import time
 from pathlib import Path
 from typing import List, Dict, Tuple
 from urllib.parse import urlparse, unquote
 
 import requests
 
-from storage.tencent_cos import TencentCOSUploader  # 添加这行到文件顶部的导入部分
+from storage.base_uploader import BaseUploader
 
 
 class MarkdownImageDownloader:
-    def __init__(self, save_dir: str, cos_uploader: TencentCOSUploader = None):
+    def __init__(self, save_dir: str, uploader: BaseUploader = None):
         """
         初始化下载器
         :param save_dir: 图片保存目录
-        :param cos_uploader: COS上传器实例
+        :param uploader: 上传器实例
         """
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
-        self.cos_uploader = cos_uploader
+        self.uploader = uploader
+
+        # 分钟级限制
+        self.last_upload_time = time.time()
+        self.upload_count = 0
+        self.upload_limit = 15  # 每分钟最大上传数
+        self.upload_interval = 60  # 重置计数器的时间间隔（秒）
+
+        # 小时级限制
+        self.hourly_last_reset = time.time()
+        self.hourly_upload_count = 0
+        self.hourly_upload_limit = 100  # 每小时最大上传数
+        self.hourly_interval = 3600  # 一小时的秒数
+
+    def _check_upload_rate(self):
+        """检查并控制上传速率"""
+        current_time = time.time()
+
+        # 检查小时级限制
+        if current_time - self.hourly_last_reset >= self.hourly_interval:
+            self.hourly_upload_count = 0
+            self.hourly_last_reset = current_time
+        elif self.hourly_upload_count >= self.hourly_upload_limit:
+            sleep_time = self.hourly_interval - (current_time - self.hourly_last_reset)
+            print(f"已达到每小时上传限制，等待 {sleep_time / 60:.1f} 分钟后继续...")
+            time.sleep(sleep_time)
+            self.hourly_upload_count = 0
+            self.hourly_last_reset = time.time()
+            current_time = time.time()  # 更新当前时间
+
+        # 检查分钟级限制
+        if current_time - self.last_upload_time >= self.upload_interval:
+            self.upload_count = 0
+            self.last_upload_time = current_time
+        elif self.upload_count >= self.upload_limit:
+            sleep_time = self.upload_interval - (current_time - self.last_upload_time)
+            time.sleep(sleep_time)
+            self.upload_count = 0
+            self.last_upload_time = time.time()
 
     def replace_image_urls(self, content: str, url_mapping: Dict[str, str]) -> str:
         """
@@ -64,19 +103,17 @@ class MarkdownImageDownloader:
         # 下载并上传每个图片
         for url in image_urls:
             success, error, save_path = self.download_image(url)
-            if success and self.cos_uploader:
+            if success and self.uploader:
                 try:
-                    # 生成新的对象名称（使用原始文件名）
+                    self._check_upload_rate()
+
                     object_name = f"images/{Path(save_path).name}"
+                    new_url = self.uploader.upload_file(save_path, object_name)
 
-                    # 上传到COS
-                    upload_success = self.cos_uploader.upload_file(save_path, object_name)
-
-                    if upload_success:
-                        # 获取新的URL
-                        new_url = f"https://{self.cos_uploader.bucket}.cos.{self.cos_uploader.region}.myqcloud.com/{object_name}"
+                    if new_url:
+                        self.upload_count += 1
+                        self.hourly_upload_count += 1
                         url_mapping[url] = new_url
-
                         results["success"].append({
                             "url": url,
                             "save_path": save_path,
@@ -88,10 +125,24 @@ class MarkdownImageDownloader:
                             "error": "上传失败"
                         })
                 except Exception as e:
-                    results["failed"].append({
-                        "url": url,
-                        "error": f"上传出错: {str(e)}"
-                    })
+                    error_str = str(e)
+                    # 检查是否是图片已存在的错误
+                    if "Image upload repeated limit, this image exists at:" in error_str:
+                        # 提取已存在的图片URL
+                        existing_url = error_str.split("exists at: ")[-1].strip()
+                        # 使用已存在的URL进行替换
+                        url_mapping[url] = existing_url
+                        results["success"].append({
+                            "url": url,
+                            "save_path": save_path,
+                            "new_url": existing_url,
+                            "note": "使用已存在的图片URL"
+                        })
+                    else:
+                        results["failed"].append({
+                            "url": url,
+                            "error": error_str
+                        })
             elif not success:
                 results["failed"].append({
                     "url": url,
@@ -99,7 +150,7 @@ class MarkdownImageDownloader:
                 })
 
         # 如果有成功上传的图片，更新Markdown文件
-        if url_mapping and self.cos_uploader:
+        if url_mapping and self.uploader:
             try:
                 # 替换内容中的URL
                 new_content = self.replace_image_urls(content, url_mapping)
@@ -128,7 +179,13 @@ class MarkdownImageDownloader:
         urls = []
         urls.extend(re.findall(md_pattern, md_content))
         urls.extend(re.findall(html_pattern, md_content))
-        return [url.strip() for url in urls if url.strip()]
+
+        # 过滤掉已经在 SM.MS 的图片
+        filtered_urls = [
+            url.strip() for url in urls
+            if url.strip() and 's2.loli.net' not in url.strip()
+        ]
+        return filtered_urls
 
     def download_image(self, url: str) -> Tuple[bool, str, str]:
         """
