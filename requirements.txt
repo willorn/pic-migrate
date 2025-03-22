@@ -1,0 +1,23 @@
+# 基础依赖
+python-dotenv
+requests
+requests-file
+requests-toolbelt
+
+# 类型提示相关
+typing-inspect==0.9.0
+typing_extensions==4.12.2
+
+# 路径处理
+cloudpathlib==0.20.0
+
+# 网络请求
+urllib3
+
+# 腾讯云 COS SDK（如果使用腾讯云存储）
+cos-python-sdk-v5>=1.9.25
+
+# 日志和工具
+pathlib>=1.0.1
+typing>=3.7.4.3
+urllib3>=2.1.0
