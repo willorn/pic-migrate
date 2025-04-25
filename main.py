@@ -1,45 +1,22 @@
-import logging
 from pathlib import Path
-
-from markdown.image_downloader import MarkdownImageDownloader
-
 import os
-from storage.tencent_cos import TencentCOSUploader
 from dotenv import load_dotenv
-
-# 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from utils.logger import logger  # 修改这里
+from storage.uploaders.sms_uploader import SMSUploader
+from markdown.image_downloader import MarkdownImageDownloader
 
 # 加载环境变量
 load_dotenv()
 
-
 def main():
     # 配置路径
-    markdown_dir = Path("./tests")  # 你的markdown文件所在目录
-    save_dir = Path("./tests")  # 图片保存目录
+    markdown_dir = Path("C:\\Users\\tianyi\\WebstormProjects\\tackle_challenge\\docs")  # 你的markdown文件所在目录
+    # markdown_dir = Path("D:\\file_repo\\obsidian")  # 你的markdown文件所在目录
+    save_dir = Path("./tests/20250322")  # 图片保存目录
+    uploader = SMSUploader(api_token=os.getenv('SMS_API_TOKEN'))
 
-    # 创建COS上传器实例
-    bucket = os.getenv('COS_BUCKET')
-    app_id = os.getenv('COS_APP_ID')
-
-    # 确保bucket名称格式正确
-    if not bucket.endswith(f"-{app_id}"):
-        bucket = f"{bucket}-{app_id}"
-
-    cos_uploader = TencentCOSUploader(
-        secret_id=os.getenv('COS_SECRET_ID'),
-        secret_key=os.getenv('COS_SECRET_KEY'),
-        region=os.getenv('COS_REGION'),
-        bucket=bucket
-    )
-
-    # 创建下载器实例，传入COS上传器
-    downloader = MarkdownImageDownloader(str(save_dir), cos_uploader)
+    # 创建下载器实例
+    downloader = MarkdownImageDownloader(str(save_dir), uploader)
 
     # 获取所有md文件
     md_files = list(markdown_dir.glob("**/*.md"))
